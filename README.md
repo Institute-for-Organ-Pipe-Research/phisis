@@ -1,299 +1,185 @@
+# Algorytm
+
+```
+
+───────────────────────────────────────────────────────────────────────
+ ALGORYTM SYNTEZY ORGANOWEJ - WIZUALIZACJA TEKSTOWA (US7442869B2)
+───────────────────────────────────────────────────────────────────────
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                        GENERATOR HARMONICZNY (Fig. 3)               │
+└─────────────────────────────────────────────────────────────────────┘
+                         ↓
+               ┌───────────────────┐
+               │ Oscylator (Fig. 4) │
+               └───────────────────┘
+               VAR1[n] = CLIP(VAR1[n-1] - F²·VAR2[n-1], [-1,1]  (29,32)
+               VAR2[n] = (VAR2[n-1]·(1+ε)) + VAR1[n]      (30-31)
+               F = 2·sin(π·f/fs)                          (definicja)
+                         ↓
+               ┌───────────────────┐
+               │ Nieliniowy blok (15) │
+               └───────────────────┘
+               y[n] = 2·(VAR1[n])² - 1 = -cos(2ω₀n)       (transformacja)
+                         ↓
+       ┌────────────────┴─────────────────┐
+       │ Ścieżka 1            Ścieżka 2  │
+       │ GAIN1·x[n]           GAIN2·y[n]  │ (18a,18b)
+       │ CLIP(±CLIP1)         CLIP(±CLIP2)│ (19a,19b)
+       │ ENV1[n]              ENV2[n]     │ (20a,20b)
+       └───────┬────────────────┬─────────┘
+               ↓
+         ┌─────────────┐
+         │ Sumator (21) │ → z[n] = path1 + path2
+         └─────────────┘
+               ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                     PRZETWARZANIE HARMONICZNE                       │
+└─────────────────────────────────────────────────────────────────────┘
+         ┌─────────────┐    ┌─────────────┐
+         │ Linia opóź. │ → │ CBYP + CDEL·z⁻ᴺ │ (24,25)
+         └─────────────┘    └─────────────┘
+               ↓
+         ┌─────────────┐
+         │ Nielin. f(x)│ → f(x) ≈ x - x⁴ (26)
+         └─────────────┘
+               ↓
+   ┌───────────────────────────────┐
+   │ Filtr pasmowoprzepustowy (27) │ → H(z) = 1/(1 - r·cos(ω₀)·z⁻¹ + r²·z⁻²)
+   └───────────────────────────────┘
+               ↓
+   ┌───────────────────────────────┐
+   │ Sumator wyjściowy (28)        │ → out = GAIND·x + GAINF·BPF(x)
+   └───────────────────────────────┘
+
+───────────────────────────────────────────────────────────────────────
+┌─────────────────────────────────────────────────────────────────────┐
+│                      GENERATOR SZUMU (Fig. 10-12)                   │
+└─────────────────────────────────────────────────────────────────────┘
+                         ↓
+               ┌───────────────────┐
+               │ Generator RATE     │
+               └───────────────────┘
+               RATE[n] = RTGAIN·CLIP(HPF(VAR1[n]))·ENV[n] (Fig. 10)
+                         ↓
+               ┌───────────────────┐
+               │ NOISE BOX (Fig. 11)│ → Struktura z 4 liniami opóźnienia:
+               └───────────────────┘   y[n] = Σ (NCGAIN·x[n-k] + NBFBK·y[n-M])
+                         ↓
+               ┌───────────────────┐
+               │ Limitator szybkości│ → y[n] = y[n-1] + CLIP(x[n]-y[n-1], ±RATE[n])
+               └───────────────────┘ (Fig. 12)
+                         ↓
+               ┌───────────────────┐
+               │ Mnożenie przez ENV │ → NOISE[n] = NGAIN·y[n]·ENV_NOISE[n]
+               └───────────────────┘ (43)
+
+───────────────────────────────────────────────────────────────────────
+┌─────────────────────────────────────────────────────────────────────┐
+│                      REZONATOR LINIOWY (Fig. 15)                    │
+└─────────────────────────────────────────────────────────────────────┘
+   ┌───────────────────────┐    ┌───────────────────────┐
+   │ Wejście harmoniczne   │    │ Wejście szumowe       │
+   └───────────┬───────────┘    └───────────┬───────────┘
+               ↓                            ↓
+         ┌─────────────┐              ┌─────────────┐
+         │ Sumator (46)│ → x[n] = HARMONIC[n] + NOISE[n]
+         └─────────────┘
+               ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                         PĘTLA REZONANSA                             │
+└─────────────────────────────────────────────────────────────────────┘
+   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+   │ Filtr LP (47)│ → │ Filtr HP (49)│ → │ Filtr AP (52)│ → H_AP(z) = (a + z⁻¹)/(1 + a·z⁻¹)
+   └─────────────┘    └─────────────┘    └─────────────┘
+               ↑            ↓                    ↓
+               │    ┌─────────────┐    ┌─────────────┐
+               └───┤ Mnożenie FBK │ ←─┤ Mnożenie TFBK│ (53)
+                   └─────────────┘    └─────────────┘
+                         ↓
+                   ┌─────────────┐
+                   │ Linia opóź. │ → D(z) = z⁻ᴺ (54)
+                   └─────────────┘
 
-# Opis algorytmu syntezy dźwięku organowego (na podstawie US7442869B2)
+───────────────────────────────────────────────────────────────────────
+┌─────────────────────────────────────────────────────────────────────┐
+│                         WYJŚCIE (13)                               │
+└─────────────────────────────────────────────────────────────────────┘
+                         ↓
+               ┌───────────────────┐
+               │ Sygnał wyjściowy  │ → y[n] = TFBK·delay_line[k]
+               └───────────────────┘
 
-## Cel algorytmu
-Celem patentu jest realistyczna **synteza dźwięku piszczałki organowej** na podstawie modelu fizycznego (ang. *Physis synthesis*), w tym zjawisk akustycznych w obrębie:
-- generatora (język, ustnik, źródło energii),
-- ciała piszczałki (rezonator),
-- modulacji dźwięku,
-- oraz szumów i nieliniowości.
+───────────────────────────────────────────────────────────────────────
+ LEGENDA:
+ • VAR1, VAR2 - zmienne stanu oscylatora
+ • F - współczynnik częstotliwości
+ • ε - mała stała stabilizująca (≈1e-5)
+ • ω₀ = 2π·f/fs - znormalizowana częstotliwość
+ • CLIP(x,a,b) - ograniczenie x do przedziału [a,b]
+ • HPF/LPF/APF - filtry: górno-, dolno- i wszechprzepustowy
+ • z⁻ᴺ - opóźnienie o N próbek
+───────────────────────────────────────────────────────────────────────
+```
 
----
+## Opis
 
-## Struktura modelu według patentu (schemat z Fig. 15)
+```
+Kluczowe elementy zgodne z patentem:
 
-+-----------------------------+
-      | Harmonic Component Generator| <-- sinusoida z modulacją
-      +-----------------------------+
-                  |
-                  v
-      +-----------------------------+
-      | Random (Aleatory) Component | <-- generuje szum
-      +-----------------------------+
-                  |
-                  v
-             +----------+
-             | Resonator| <-- filtracja, opóźnienie, odbicie fazy
-             +----------+
-                  |
-                  v
-             +----------+
-             | Envelope |
-             +----------+
-                  |
-                  v
-             Final Output
+    Struktura systemu (Fig. 2):
 
----
-## Matematyka implementacji
+        Generator składowej harmonicznej (9)
 
-### 1. Generacja komponentu harmonicznego
+        Generator składowej losowej (11)
 
-$$
-x[n] = \alpha \cdot x[n-1] - x[n-2]
-$$
+        Rezonator liniowy (12)
 
-gdzie:
+    Generator harmoniczny (Fig. 3):
 
-- $f_0$ – częstotliwość podstawowa,
-- $f_{\text{lfo}}$ – częstotliwość modulacji LFO,
-- $d$ – głębokość modulacji,
-- $f(t) = f_0 \cdot (1 + d \cdot \sin(2\pi f_{\text{lfo}} t) + \text{noise})$,
-- $\alpha = 2\cos\left(2\pi \frac{f(t)}{f_s}\right)$.
+        Oscylator sinusoidalny (14) z równaniami (29)-(32)
 
-Dodatkowo sygnał jest delikatnie wzmacniany i przycinany:
+        Nieliniowy konwerter częstotliwości (15)
 
-$$
-x[n] \leftarrow \min(\max(1.001 \cdot x[n], -\text{clip}), \text{clip})
-$$
+        Ścieżki przetwarzania z ogranicznikami (19a, 19b)
 
----
+        Obwiednie amplitudy (20a, 20b)
 
-### 2. Komponent szumowy (Random Component Generator)
+        Linia opóźnienia (24) i filtr (25)
 
-Algorytm bazuje na ograniczonej zmianie różnicy wartości RNG:
+        Nieliniowa funkcja (26)
 
-$$
-\text{output}[n] = \text{output}[n-1] + \min(\max(R[n] - R[n-1], -r[n]), r[n])
-$$
-
-gdzie:
-- $R[n]$ – wartość losowa z rozkładu jednostajnego,
-- $r[n]$ – dynamiczna szybkość zmiany, zależna od harmonicznej.
+        Filtr pasmowoprzepustowy (27)
 
----
+        Sumator wyjściowy (28)
 
-### 3. Nieliniowe przekształcenie
+    Generator szumu (Fig. 10-12):
 
-Wzmocnienie i zniekształcenie harmonicznego sygnału:
+        Generacja sygnału RATE (Fig. 10)
 
-$$
-y[n] = \text{gain} \cdot x[n]^2 - 1
-$$
+        Struktura NOISE BOX z czterema liniami opóźnienia (Fig. 11)
 
----
+        Limitator szybkości (42) z implementacją równań (Fig. 12)
 
-### 4. Rezonator
+    Rezonator liniowy (Fig. 15):
 
-Modeluje propagację fali w piszczałce z uwzględnieniem:
+        Filtr dolnoprzepustowy (47)
 
-- filtr dolnoprzepustowy (LP),
-- filtr górnoprzepustowy (HP),
-- filtr all-pass (AP),
-- linia opóźniająca (delay line),
-- sprzężenie zwrotne (feedback `tfbk`).
+        Filtr górnoprzepustowy (49)
 
-#### Filtry:
+        Generator obwiedni sprzężenia (50)
 
-$$
-\begin{aligned}
-\text{LP}[n] &= a_0 \cdot \text{in}[n] + a_1 \cdot \text{LP}[n-1] \\
-\text{HP}[n] &= b_0 \cdot \text{LP}[n] + b_1 \cdot \text{HP}[n-1] \\
-\text{AP}[n] &= c_0 \cdot \text{HP}[n] + c_1 \cdot \text{AP}[n-1]
-\end{aligned}
-$$
+        Filtr wszechprzepustowy (52)
 
-#### Linia opóźniająca i sprzężenie zwrotne:
+        Linia opóźnienia (54)
 
-$$
-\text{delay}[n] = \text{AP}[n] \cdot \text{tfbk}
-$$
+        Sprzężenie zwrotne (53)
 
-Faza sygnału jest odwracana zależnie od typu piszczałki (otwarta/zamknięta) przez `tfbk < 0`.
+    Obwiednie:
 
----
+        5-segmentowa obwiednia harmoniczna (Fig. 7)
 
-### 5. Obwiednia (ADSR)
+        Prosta obwiednia szumu (Fig. 13)
 
-Wzorzec dynamiczny:
+```
 
-1. Attack: $0 \to 1$ przez czas `attack_time`
-2. Decay: $1 \to sustain$ przez `decay_time`
-3. Sustain: stała wartość `sustain_level`
-4. Release: $sustain \to 0$ przez `release_time`
-
----
-
-## ⚖️ Porównanie implementacji vs patent
-
-| Część modelu                     | Opis wg patentu                  | Obecna implementacja            |
-|----------------------------------|----------------------------------|----------------------------------|
-| Harmonic Generator              | Oscylator z LFO + losowość       | ✅ obecny w `generate_harmonic` |
-| Random Component Generator      | Szum ograniczany sygnałem sterującym | ✅ obecny w `generate_noise`  |
-| Nieliniowość                    | Zniekształcenie przez nieliniowe przekształcenie | ✅ `nonlinear_gain` i clip  |
-|
-# Opis algorytmu syntezy dźwięku organowego (na podstawie US7442869B2)
-
-## Cel algorytmu
-Celem patentu jest realistyczna **synteza dźwięku piszczałki organowej** na podstawie modelu fizycznego (ang. *Physis synthesis*), w tym zjawisk akustycznych w obrębie:
-- generatora (język, ustnik, źródło energii),
-- ciała piszczałki (rezonator),
-- modulacji dźwięku,
-- oraz szumów i nieliniowości.
-
----
-
-## Struktura modelu według patentu (schemat z Fig. 15)
-
-+-----------------------------+
-      | Harmonic Component Generator| <-- sinusoida z modulacją
-      +-----------------------------+
-                  |
-                  v
-      +-----------------------------+
-      | Random (Aleatory) Component | <-- generuje szum
-      +-----------------------------+
-                  |
-                  v
-             +----------+
-             | Resonator| <-- filtracja, opóźnienie, odbicie fazy
-             +----------+
-                  |
-                  v
-             +----------+
-             | Envelope |
-             +----------+
-                  |
-                  v
-             Final Output
-
----
-## Matematyka implementacji
-
-### 1. Generacja komponentu harmonicznego
-
-$$
-x[n] = \alpha \cdot x[n-1] - x[n-2]
-$$
-
-gdzie:
-
-- $f_0$ – częstotliwość podstawowa,
-- $f_{\text{lfo}}$ – częstotliwość modulacji LFO,
-- $d$ – głębokość modulacji,
-- $f(t) = f_0 \cdot (1 + d \cdot \sin(2\pi f_{\text{lfo}} t) + \text{noise})$,
-- $\alpha = 2\cos\left(2\pi \frac{f(t)}{f_s}\right)$.
-
-Dodatkowo sygnał jest delikatnie wzmacniany i przycinany:
-
-$$
-x[n] \leftarrow \min(\max(1.001 \cdot x[n], -\text{clip}), \text{clip})
-$$
-
----
-
-### 2. Komponent szumowy (Random Component Generator)
-
-Algorytm bazuje na ograniczonej zmianie różnicy wartości RNG:
-
-$$
-\text{output}[n] = \text{output}[n-1] + \min(\max(R[n] - R[n-1], -r[n]), r[n])
-$$
-
-gdzie:
-- $R[n]$ – wartość losowa z rozkładu jednostajnego,
-- $r[n]$ – dynamiczna szybkość zmiany, zależna od harmonicznej.
-
----
-
-### 3. Nieliniowe przekształcenie
-
-Wzmocnienie i zniekształcenie harmonicznego sygnału:
-
-$$
-y[n] = \text{gain} \cdot x[n]^2 - 1
-$$
-
----
-
-### 4. Rezonator
-
-Modeluje propagację fali w piszczałce z uwzględnieniem:
-
-- filtr dolnoprzepustowy (LP),
-- filtr górnoprzepustowy (HP),
-- filtr all-pass (AP),
-- linia opóźniająca (delay line),
-- sprzężenie zwrotne (feedback `tfbk`).
-
-#### Filtry:
-
-$$
-\begin{aligned}
-\text{LP}[n] &= a_0 \cdot \text{in}[n] + a_1 \cdot \text{LP}[n-1] \\
-\text{HP}[n] &= b_0 \cdot \text{LP}[n] + b_1 \cdot \text{HP}[n-1] \\
-\text{AP}[n] &= c_0 \cdot \text{HP}[n] + c_1 \cdot \text{AP}[n-1]
-\end{aligned}
-$$
-
-#### Linia opóźniająca i sprzężenie zwrotne:
-
-$$
-\text{delay}[n] = \text{AP}[n] \cdot \text{tfbk}
-$$
-
-Faza sygnału jest odwracana zależnie od typu piszczałki (otwarta/zamknięta) przez `tfbk < 0`.
-
----
-
-### 5. Obwiednia (ADSR)
-
-Wzorzec dynamiczny:
-
-1. Attack: $0 \to 1$ przez czas `attack_time`
-2. Decay: $1 \to sustain$ przez `decay_time`
-3. Sustain: stała wartość `sustain_level`
-4. Release: $sustain \to 0$ przez `release_time`
-
----
-
-## ⚖️ Porównanie implementacji vs patent
-
-| Część modelu                     | Opis wg patentu                  | Obecna implementacja            |
-|----------------------------------|----------------------------------|----------------------------------|
-| Harmonic Generator              | Oscylator z LFO + losowość       | ✅ obecny w `generate_harmonic` |
-| Random Component Generator      | Szum ograniczany sygnałem sterującym | ✅ obecny w `generate_noise`  |
-| Nieliniowość                    | Zniekształcenie przez nieliniowe przekształcenie | ✅ `nonlinear_gain` i clip  |
-| Rezonator                       | LP, HP, AP + delay line + tfbk   | ✅ `resonator`                  |
-| Anharmoniczność                 | All-pass dla przesunięć fazy     | 🔶 uproszczony, ręczne `ap_coeffs` |
-| Faza (open vs stopped)          | Sterowane przez `tfbk`           | ✅ `tfbk` obecne                 |
-| Emisja z różnych punktów        | Top vs mouth                     | ❌ brak                         |
-| Sprzężenie generator ↔ rezonator| W realu silne, w patencie słabe  | ✅ niezależne w implementacji    |
-| Obwiednia ADSR                  | Wygenerowana programowo          | ✅ `generate_envelope`          |
-
----
-
-## 🔧 Możliwe ulepszenia
-
-1. Automatyczne dobieranie `ap_coeffs` dla *anharmoniczności*.
-2. Złożony delay z podziałem na mouth/top output.
-3. Użycie konwolucji w miejscu filtrów IIR dla precyzji.
-4. Dynamiczne sterowanie `tfbk` zależnie od tonu. Rezonator                       | LP, HP, AP + delay line + tfbk   | ✅ `resonator`                  |
-| Anharmoniczność                 | All-pass dla przesunięć fazy     | 🔶 uproszczony, ręczne `ap_coeffs` |
-| Faza (open vs stopped)          | Sterowane przez `tfbk`           | ✅ `tfbk` obecne                 |
-| Emisja z różnych punktów        | Top vs mouth                     | ❌ brak                         |
-| Sprzężenie generator ↔ rezonator| W realu silne, w patencie słabe  | ✅ niezależne w implementacji    |
-| Obwiednia ADSR                  | Wygenerowana programowo          | ✅ `generate_envelope`          |
-
----
-
-## 🔧 Możliwe ulepszenia
-
-1. Automatyczne dobieranie `ap_coeffs` dla *anharmoniczności*.
-2. Złożony delay z podziałem na mouth/top output.
-3. Użycie konwolucji w miejscu filtrów IIR dla precyzji.
-4. Dynamiczne sterowanie `tfbk` zależnie od tonu.
-
-Jest to projekt z pozostałościami routera midi GrandBridge. Obecnie rozwój skupia się na syntezie phisis zgodnego z https://patents.google.com/patent/US7442869B2/en
-- [Parametry phisis](/docs/phisis.md)
- 
