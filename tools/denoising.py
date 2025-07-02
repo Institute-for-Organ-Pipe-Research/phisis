@@ -2,11 +2,10 @@ import os
 import tkinter as tk
 from tkinter import filedialog, ttk
 import numpy as np
-from scipy import signal
+from scipy import signal, fft
 import soundfile as sf
 from threading import Thread
 import queue
-import librosa
 
 class PipeDenoiser:
     def __init__(self):
@@ -18,35 +17,69 @@ class PipeDenoiser:
         if peak > 0:
             return audio / peak
         return audio
+    
+    def apply_fade(self, audio, fade_len=500):
+        """Stosuje fade-in i fade-out do nagrania"""
+        if fade_len <= 0:
+            return audio
+            
+        # Fade-in na początku
+        if len(audio) > fade_len:
+            fade_in = np.linspace(0, 1, fade_len)
+            audio[:fade_len] = audio[:fade_len] * fade_in
         
-    def safe_denoise(self, audio, strength=0.85):
+        # Fade-out na końcu
+        if len(audio) > fade_len:
+            fade_out = np.linspace(1, 0, fade_len)
+            audio[-fade_len:] = audio[-fade_len:] * fade_out
+        else:
+            fade_out = np.linspace(1, 0, len(audio))
+            audio = audio * fade_out
+        
+        return audio
+        
+    def spectral_gating(self, audio, strength=0.75):
         """
-        Usuwanie pogłosu przy użyciu redukcji szumu spektralnego
-        z zabezpieczeniem przed artefaktami
+        Redukcja szumu poprzez bramkowanie spektralne
+        ze zmniejszoną agresywnością i wygładzaniem
         """
-        # Konwersja do dziedziny częstotliwości (STFT)
-        S = librosa.stft(audio.astype(np.float32))
-        magnitude, phase = librosa.magphase(S)
+        window_size = 2048
+        hop_size = 512
+        window = signal.windows.hann(window_size)
         
-        # Oblicz szacowane tło (pogłos)
-        background = librosa.decompose.nn_filter(
-            magnitude,
-            aggregate=np.median,
-            metric='cosine',
-            width=int(librosa.time_to_frames(0.2, sr=self.sr))
-        )
+        clean_audio = np.zeros(len(audio))
+        weight = np.zeros(len(audio))  # Do poprawnego nakładania ramek
         
-        # Maska do usuwania tła
-        mask = np.maximum(1.0 - strength * (background / magnitude), 0)
-        clean_magnitude = magnitude * mask
+        for i in range(0, len(audio) - window_size, hop_size):
+            frame = audio[i:i+window_size] * window
+            
+            spectrum = fft.rfft(frame)
+            magnitude = np.abs(spectrum)
+            
+            # Mniej agresywny próg szumu
+            noise_threshold = np.percentile(magnitude, 30 * (1 - strength))
+            
+            # Tworzenie miękkiej maski zamiast ostrego cięcia
+            mask = np.where(magnitude > noise_threshold, 
+                           1, 
+                           np.sqrt(magnitude / (noise_threshold + 1e-10)))
+            
+            # Dodatkowe wygładzenie maski
+            mask = signal.medfilt(mask, kernel_size=3)
+            
+            clean_spectrum = spectrum * mask
+            clean_frame = np.real(fft.irfft(clean_spectrum))
+            
+            clean_audio[i:i+window_size] += clean_frame * window
+            weight[i:i+window_size] += window
         
-        # Rekonstrukcja sygnału
-        clean_S = clean_magnitude * phase
-        clean_audio = librosa.istft(clean_S)
+        # Unikaj dzielenia przez zero
+        weight[weight == 0] = 1
+        clean_audio = clean_audio / weight
         
-        return clean_audio.astype(np.float32)
+        return self.normalize(clean_audio)
 
-    def process_note(self, a0_path, r_paths, output_path, strength=0.85, progress_queue=None):
+    def process_note(self, a0_path, r_paths, output_path, strength=0.75, progress_queue=None):
         try:
             # Wczytaj próbkę A0
             a0_audio, sr = sf.read(a0_path)
@@ -56,6 +89,11 @@ class PipeDenoiser:
 
             # Normalizuj A0
             a0_audio = self.normalize(a0_audio)
+            
+            # Zastosuj fade-out do A0
+            fade_len = int(0.05 * sr)
+            if len(a0_audio) > fade_len:
+                a0_audio = self.apply_fade(a0_audio, fade_len)
 
             # Wczytaj i uśrednij próbki R
             r_audios = []
@@ -66,6 +104,9 @@ class PipeDenoiser:
                         r_audio = np.mean(r_audio, axis=1)
                     if r_sr != sr:
                         r_audio = signal.resample(r_audio, int(len(r_audio) * sr / r_sr))
+                    
+                    # Zastosuj fade-in i fade-out do R
+                    r_audio = self.apply_fade(r_audio, fade_len)
                     r_audios.append(self.normalize(r_audio))
 
             # Uśrednij próbki R
@@ -74,13 +115,16 @@ class PipeDenoiser:
                 max_len = max(len(r) for r in r_audios)
                 avg_r = np.zeros(max_len)
                 for r in r_audios:
-                    avg_r[:len(r)] += r[:len(r)]
+                    # Dopasuj długość do najdłuższego R
+                    padded = np.pad(r, (0, max_len - len(r)), mode='constant')
+                    avg_r += padded
                 avg_r /= len(r_audios)
                 avg_r = self.normalize(avg_r)
 
             # Połącz A0 z uśrednionym R
             if len(avg_r) > 0:
-                crossfade = min(int(0.5 * sr), len(a0_audio)//3, len(avg_r)//3)
+                # Dłuższy crossfade (1 sekunda)
+                crossfade = min(int(1.0 * sr), len(a0_audio)//3, len(avg_r)//3)
                 if crossfade > 0:
                     fade_out = np.linspace(1, 0, crossfade)
                     fade_in = np.linspace(0, 1, crossfade)
@@ -96,7 +140,10 @@ class PipeDenoiser:
                 combined = a0_audio
 
             # Usuń pogłos z całej próbki
-            cleaned = self.safe_denoise(combined, strength)
+            cleaned = self.spectral_gating(combined, strength)
+            
+            # Ponowna normalizacja końcowa
+            cleaned = self.normalize(cleaned)
 
             # Zapisz wynik
             sf.write(output_path, cleaned, sr)
@@ -122,7 +169,7 @@ class DenoiserGUI:
         # Variables
         self.root_dir = tk.StringVar()
         self.output_dir = tk.StringVar(value=os.path.join(os.getcwd(), "denoised_output"))
-        self.strength = tk.DoubleVar(value=0.85)
+        self.strength = tk.DoubleVar(value=0.75)  # Zmniejszona domyślna siła
         self.status = tk.StringVar(value="Ready")
         self.files = []
         
@@ -168,15 +215,24 @@ class DenoiserGUI:
         ctrl_frame = ttk.Frame(self.root, padding="10")
         ctrl_frame.grid(row=2, column=0, sticky=(tk.W, tk.E))
         
-        ttk.Label(ctrl_frame, text="Denoise Strength:").grid(row=0, column=0)
+        ttk.Label(ctrl_frame, text="Denoise Strength (lower = gentler):").grid(row=0, column=0)
         strength_slider = ttk.Scale(ctrl_frame, from_=0.1, to=1.0, variable=self.strength)
-        strength_slider.grid(row=0, column=1)
+        strength_slider.grid(row=0, column=1, padx=5)
+        
+        # Dodaj etykietę z bieżącą wartością
+        value_label = ttk.Label(ctrl_frame, text=f"{self.strength.get():.2f}")
+        value_label.grid(row=0, column=2)
+        
+        # Aktualizuj etykietę gdy suwak się zmienia
+        def update_label(event):
+            value_label.config(text=f"{self.strength.get():.2f}")
+        strength_slider.bind("<Motion>", update_label)
         
         self.process_btn = ttk.Button(ctrl_frame, text="Process Selected", command=self.process_selected)
-        self.process_btn.grid(row=0, column=4, padx=10)
+        self.process_btn.grid(row=0, column=3, padx=10)
         
         self.process_all_btn = ttk.Button(ctrl_frame, text="Process All", command=self.process_all)
-        self.process_all_btn.grid(row=0, column=5)
+        self.process_all_btn.grid(row=0, column=4)
         
         # Status bar
         status_frame = ttk.Frame(self.root, padding="10")
@@ -187,6 +243,7 @@ class DenoiserGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(1, weight=1)
 
+    # DODANE BRAKUJĄCE METODY
     def browse_root(self):
         directory = filedialog.askdirectory(title="Select Root Directory")
         if directory:
