@@ -172,11 +172,33 @@ if __name__ == "__main__":
     # Inicjalizacja dla Principal 8'
     pipe = PhisisOrganPipe()
     
-    # Ustawienie parametrów (można modyfikować)
-    pipe.set_parameter('f0', 440)
-    pipe.set_parameter('pipe_length', 2.5)
-    pipe.set_parameter('mod_depth', 0.007)
-    pipe.set_parameter('noise_level', 0.04)
+    # Parametry podstawowe
+    pipe.set_parameter('f0', 440.0)
+    pipe.set_parameter('pipe_length', 0.39)
+
+    # Parametry modulacji i nieliniowości
+    pipe.set_parameter('mod_depth', 0.005)
+    pipe.set_parameter('lfo_freq', 0.2)
+    pipe.set_parameter('nonlinear_gain', 1.2)
+    pipe.set_parameter('clip_level', 0.8)
+
+    # Parametry szumu
+    pipe.set_parameter('noise_level', 0.015)
+    pipe.set_parameter('rate_scale', 0.2)
+    
+    # Parametry rezonatora
+    pipe.set_parameter('lp_coeffs', np.array([0.9, -0.1]) )
+    pipe.set_parameter('hp_coeffs', np.array([0.85, -0.85]) )
+    pipe.set_parameter('ap_coeffs', np.array([0.6, -0.6]) )
+    pipe.set_parameter('tfbk', 0.9)
+
+    # Parametry obwiedni
+    pipe.set_parameter('attack_time', 0.08)
+    pipe.set_parameter('decay_time', 0.15)
+    pipe.set_parameter('sustain_level', 0.75)
+    pipe.set_parameter('release_time', 0.5)
+    pipe.set_parameter('noise_attack', 0.02)
+
     
     # Generacja i zapis dźwięku
     note = pipe.generate_note(4.0)
