@@ -20,13 +20,16 @@ class PipeDenoiser:
     
     def apply_fade(self, audio, fade_len=500):
         """Stosuje fade-in i fade-out do nagrania"""
-        if fade_len <= 0:
+        if fade_len <= 0 or len(audio) < 10:
             return audio
             
         # Fade-in na początku
         if len(audio) > fade_len:
             fade_in = np.linspace(0, 1, fade_len)
             audio[:fade_len] = audio[:fade_len] * fade_in
+        else:
+            fade_in = np.linspace(0, 1, len(audio))
+            audio = audio * fade_in
         
         # Fade-out na końcu
         if len(audio) > fade_len:
@@ -38,43 +41,44 @@ class PipeDenoiser:
         
         return audio
         
-    def spectral_gating(self, audio, strength=0.75):
+    def remove_reverb(self, audio, strength=0.75):
         """
-        Redukcja szumu poprzez bramkowanie spektralne
-        ze zmniejszoną agresywnością i wygładzaniem
+        Redukcja pogłosu z zachowaniem jakości dźwięku
         """
         window_size = 2048
         hop_size = 512
         window = signal.windows.hann(window_size)
         
         clean_audio = np.zeros(len(audio))
-        weight = np.zeros(len(audio))  # Do poprawnego nakładania ramek
+        weight = np.zeros(len(audio))
         
+        # Przetwarzaj w blokach z nakładaniem
         for i in range(0, len(audio) - window_size, hop_size):
             frame = audio[i:i+window_size] * window
             
             spectrum = fft.rfft(frame)
             magnitude = np.abs(spectrum)
+            phase = np.angle(spectrum)
             
-            # Mniej agresywny próg szumu
-            noise_threshold = np.percentile(magnitude, 30 * (1 - strength))
+            # Szacuj pogłos jako składowe o niskiej amplitudzie
+            threshold = np.percentile(magnitude, 40 * (1 - strength))
             
-            # Tworzenie miękkiej maski zamiast ostrego cięcia
-            mask = np.where(magnitude > noise_threshold, 
+            # Miękka maska dla płynniejszego przejścia
+            mask = np.where(magnitude > threshold, 
                            1, 
-                           np.sqrt(magnitude / (noise_threshold + 1e-10)))
+                           np.power(magnitude / (threshold + 1e-10), 0.5))
             
-            # Dodatkowe wygładzenie maski
-            mask = signal.medfilt(mask, kernel_size=3)
-            
-            clean_spectrum = spectrum * mask
+            # Odfiltruj składowe pogłosu
+            clean_magnitude = magnitude * mask
+            clean_spectrum = clean_magnitude * np.exp(1j * phase)
             clean_frame = np.real(fft.irfft(clean_spectrum))
             
+            # Nakładanie z oknem
             clean_audio[i:i+window_size] += clean_frame * window
             weight[i:i+window_size] += window
         
-        # Unikaj dzielenia przez zero
-        weight[weight == 0] = 1
+        # Normalizacja wag
+        weight[weight < 1e-10] = 1.0
         clean_audio = clean_audio / weight
         
         return self.normalize(clean_audio)
@@ -92,10 +96,9 @@ class PipeDenoiser:
             
             # Zastosuj fade-out do A0
             fade_len = int(0.05 * sr)
-            if len(a0_audio) > fade_len:
-                a0_audio = self.apply_fade(a0_audio, fade_len)
+            a0_audio = self.apply_fade(a0_audio, fade_len)
 
-            # Wczytaj i uśrednij próbki R
+            # Wczytaj i przetwórz próbki R
             r_audios = []
             for r_path in r_paths:
                 if os.path.exists(r_path):
@@ -105,12 +108,15 @@ class PipeDenoiser:
                     if r_sr != sr:
                         r_audio = signal.resample(r_audio, int(len(r_audio) * sr / r_sr))
                     
-                    # Zastosuj fade-in i fade-out do R
+                    # Usuń pogłos z każdej próbki R osobno
+                    r_audio = self.remove_reverb(r_audio, strength)
+                    
+                    # Zastosuj fade-in i fade-out
                     r_audio = self.apply_fade(r_audio, fade_len)
                     r_audios.append(self.normalize(r_audio))
 
             # Uśrednij próbki R
-            avg_r = np.zeros_like(r_audios[0]) if r_audios else np.array([])
+            avg_r = np.zeros(0)
             if r_audios:
                 max_len = max(len(r) for r in r_audios)
                 avg_r = np.zeros(max_len)
@@ -123,7 +129,7 @@ class PipeDenoiser:
 
             # Połącz A0 z uśrednionym R
             if len(avg_r) > 0:
-                # Dłuższy crossfade (1 sekunda)
+                # Crossfade 1 sekunda
                 crossfade = min(int(1.0 * sr), len(a0_audio)//3, len(avg_r)//3)
                 if crossfade > 0:
                     fade_out = np.linspace(1, 0, crossfade)
@@ -139,14 +145,11 @@ class PipeDenoiser:
             else:
                 combined = a0_audio
 
-            # Usuń pogłos z całej próbki
-            cleaned = self.spectral_gating(combined, strength)
-            
-            # Ponowna normalizacja końcowa
-            cleaned = self.normalize(cleaned)
+            # Ostateczne wygładzenie połączenia
+            combined = self.apply_fade(combined, int(0.1 * sr))
 
             # Zapisz wynik
-            sf.write(output_path, cleaned, sr)
+            sf.write(output_path, combined, sr)
             if progress_queue:
                 progress_queue.put(('success', os.path.basename(output_path)))
             return True
@@ -161,7 +164,7 @@ class DenoiserGUI:
     def __init__(self, root):
         self.root = root
         root.title("Organ Pipe Denoiser")
-        root.geometry("900x650")
+        root.geometry("1000x700")
         
         self.denoiser = PipeDenoiser()
         self.progress_queue = queue.Queue()
@@ -169,9 +172,10 @@ class DenoiserGUI:
         # Variables
         self.root_dir = tk.StringVar()
         self.output_dir = tk.StringVar(value=os.path.join(os.getcwd(), "denoised_output"))
-        self.strength = tk.DoubleVar(value=0.75)  # Zmniejszona domyślna siła
-        self.status = tk.StringVar(value="Ready")
+        self.strength = tk.DoubleVar(value=0.75)
+        self.status = tk.StringVar(value="Gotowy")
         self.files = []
+        self.check_vars = []  # Przechowuje zmienne dla checkboxów
         
         # GUI Setup
         self.create_widgets()
@@ -183,81 +187,105 @@ class DenoiserGUI:
         dir_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
         
         # Root directory
-        ttk.Label(dir_frame, text="Root Directory:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(dir_frame, text="Główny folder:").grid(row=0, column=0, sticky=tk.W)
         root_entry = ttk.Entry(dir_frame, textvariable=self.root_dir, width=50)
         root_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
-        ttk.Button(dir_frame, text="Browse...", command=self.browse_root).grid(row=0, column=2)
+        ttk.Button(dir_frame, text="Przeglądaj...", command=self.browse_root).grid(row=0, column=2)
         
         # Output directory
-        ttk.Label(dir_frame, text="Output Directory:").grid(row=1, column=0, sticky=tk.W)
+        ttk.Label(dir_frame, text="Folder wyjściowy:").grid(row=1, column=0, sticky=tk.W)
         output_entry = ttk.Entry(dir_frame, textvariable=self.output_dir, width=50)
         output_entry.grid(row=1, column=1, sticky=(tk.W, tk.E))
-        ttk.Button(dir_frame, text="Browse...", command=self.browse_output).grid(row=1, column=2)
+        ttk.Button(dir_frame, text="Przeglądaj...", command=self.browse_output).grid(row=1, column=2)
         
         # Refresh button
-        ttk.Button(dir_frame, text="Refresh List", command=self.refresh_list).grid(row=2, column=0, columnspan=3, pady=5)
+        ttk.Button(dir_frame, text="Odśwież listę", command=self.refresh_list).grid(row=2, column=0, columnspan=3, pady=5)
         
-        # Treeview for files
-        tree_frame = ttk.Frame(self.root, padding="10")
-        tree_frame.grid(row=1, column=0, sticky=(tk.N, tk.S, tk.W, tk.E))
+        # List frame with checkboxes
+        list_frame = ttk.LabelFrame(self.root, text="Próbki dźwiękowe", padding="10")
+        list_frame.grid(row=1, column=0, sticky=(tk.N, tk.S, tk.W, tk.E), padx=10, pady=5)
         
-        self.tree = ttk.Treeview(tree_frame, columns=('status'), show='tree headings')
-        self.tree.heading('#0', text='Sample')
-        self.tree.heading('status', text='R Files')
-        self.tree.column('status', width=100)
+        # Canvas for scrollable area
+        canvas = tk.Canvas(list_frame)
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
         
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        self.list_container = scrollable_frame
+        
+        # Selection buttons
+        btn_frame = ttk.Frame(list_frame)
+        btn_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Button(btn_frame, text="Zaznacz wszystkie", command=self.select_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Odznacz wszystkie", command=self.deselect_all).pack(side=tk.LEFT)
         
         # Processing controls
         ctrl_frame = ttk.Frame(self.root, padding="10")
         ctrl_frame.grid(row=2, column=0, sticky=(tk.W, tk.E))
         
-        ttk.Label(ctrl_frame, text="Denoise Strength (lower = gentler):").grid(row=0, column=0)
+        ttk.Label(ctrl_frame, text="Siła redukcji pogłosu (mniej = łagodniej):").grid(row=0, column=0)
         strength_slider = ttk.Scale(ctrl_frame, from_=0.1, to=1.0, variable=self.strength)
         strength_slider.grid(row=0, column=1, padx=5)
         
-        # Dodaj etykietę z bieżącą wartością
+        # Value display
         value_label = ttk.Label(ctrl_frame, text=f"{self.strength.get():.2f}")
         value_label.grid(row=0, column=2)
         
-        # Aktualizuj etykietę gdy suwak się zmienia
+        # Update label when slider moves
         def update_label(event):
             value_label.config(text=f"{self.strength.get():.2f}")
         strength_slider.bind("<Motion>", update_label)
         
-        self.process_btn = ttk.Button(ctrl_frame, text="Process Selected", command=self.process_selected)
-        self.process_btn.grid(row=0, column=3, padx=10)
+        # Process buttons
+        btn_frame2 = ttk.Frame(ctrl_frame)
+        btn_frame2.grid(row=0, column=3, columnspan=2, padx=10)
         
-        self.process_all_btn = ttk.Button(ctrl_frame, text="Process All", command=self.process_all)
-        self.process_all_btn.grid(row=0, column=4)
+        self.process_btn = ttk.Button(btn_frame2, text="Przetwórz zaznaczone", command=self.process_selected)
+        self.process_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.process_all_btn = ttk.Button(btn_frame2, text="Przetwórz wszystkie", command=self.process_all)
+        self.process_all_btn.pack(side=tk.LEFT)
         
         # Status bar
-        status_frame = ttk.Frame(self.root, padding="10")
+        status_frame = ttk.Frame(self.root)
         status_frame.grid(row=3, column=0, sticky=(tk.W, tk.E))
-        ttk.Label(status_frame, textvariable=self.status).pack(side=tk.LEFT)
+        ttk.Label(status_frame, text="Status:", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(10, 5))
+        self.status_label = ttk.Label(status_frame, textvariable=self.status, foreground="blue")
+        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(1, weight=1)
 
-    # DODANE BRAKUJĄCE METODY
     def browse_root(self):
-        directory = filedialog.askdirectory(title="Select Root Directory")
+        directory = filedialog.askdirectory(title="Wybierz folder główny")
         if directory:
             self.root_dir.set(directory)
             self.refresh_list()
 
     def browse_output(self):
-        directory = filedialog.askdirectory(title="Select Output Directory")
+        directory = filedialog.askdirectory(title="Wybierz folder wyjściowy")
         if directory:
             self.output_dir.set(directory)
 
     def refresh_list(self):
-        self.tree.delete(*self.tree.get_children())
+        # Clear existing list
+        for widget in self.list_container.winfo_children():
+            widget.destroy()
+        
         self.files = []
+        self.check_vars = []
         
         root_dir = self.root_dir.get()
         if not root_dir or not os.path.exists(root_dir):
@@ -265,14 +293,23 @@ class DenoiserGUI:
             
         a0_dir = os.path.join(root_dir, "A0")
         if not os.path.exists(a0_dir):
-            self.status.set("Error: A0 folder not found in root directory")
+            self.status.set("Błąd: Nie znaleziono folderu A0")
             return
             
         # Find all note files in A0
         note_files = [f for f in os.listdir(a0_dir) if f.endswith('.wav')]
         
+        # Header
+        header_frame = ttk.Frame(self.list_container)
+        header_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(header_frame, text="Przetwarzaj", width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Label(header_frame, text="Nazwa próbki", width=20).pack(side=tk.LEFT, padx=5)
+        ttk.Label(header_frame, text="Pliki R", width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Label(header_frame, text="Status", width=15).pack(side=tk.LEFT, padx=5)
+        
         for note_file in sorted(note_files):
-            base_name = os.path.splitext(note_file)[0]  # np. "036-c"
+            base_name = os.path.splitext(note_file)[0]
             
             # Find corresponding R files
             r_files = []
@@ -281,60 +318,100 @@ class DenoiserGUI:
                 if os.path.exists(r_path):
                     r_files.append(r_path)
             
-            # Wyświetl pełną nazwę pliku w liście
-            item = self.tree.insert('', 'end', text=base_name, 
-                                  values=(f"R files: {len(r_files)}"))
+            # Create list item
+            item_frame = ttk.Frame(self.list_container)
+            item_frame.pack(fill=tk.X, pady=2)
+            
+            # Checkbox
+            chk_var = tk.BooleanVar(value=True)
+            self.check_vars.append(chk_var)
+            chk = ttk.Checkbutton(item_frame, variable=chk_var)
+            chk.pack(side=tk.LEFT, padx=5)
+            
+            # Sample name
+            ttk.Label(item_frame, text=base_name, width=25).pack(side=tk.LEFT, padx=5)
+            
+            # R files count
+            ttk.Label(item_frame, text=str(len(r_files)), width=10).pack(side=tk.LEFT, padx=5)
+            
+            # Status label
+            status_var = tk.StringVar(value="Gotowy")
+            status_label = ttk.Label(item_frame, textvariable=status_var, width=15)
+            status_label.pack(side=tk.LEFT, padx=5)
+            
+            # Store file info
             self.files.append({
                 'a0': os.path.join(a0_dir, note_file),
                 'r': r_files,
-                'item': item,
-                'name': base_name  # Przechowuj pełną nazwę (np. "036-c")
+                'status': status_var,
+                'label': status_label,
+                'name': base_name
             })
             
-        self.status.set(f"Found {len(self.files)} samples in A0 folder")
+        self.status.set(f"Znaleziono {len(self.files)} próbek w folderze A0")
+
+    def select_all(self):
+        for var in self.check_vars:
+            var.set(True)
+
+    def deselect_all(self):
+        for var in self.check_vars:
+            var.set(False)
 
     def check_queue(self):
         try:
             while True:
                 msg = self.progress_queue.get_nowait()
                 if msg[0] == 'update':
-                    item, status = msg[1], msg[2]
-                    self.tree.item(item, values=(status,))
+                    idx, status = msg[1], msg[2]
+                    self.files[idx]['status'].set(status)
+                    
+                    # Update color based on status
+                    if "Przetwarzanie" in status:
+                        self.files[idx]['label'].configure(foreground="blue")
+                    elif "Gotowy" in status:
+                        self.files[idx]['label'].configure(foreground="green")
+                    elif "Błąd" in status:
+                        self.files[idx]['label'].configure(foreground="red")
+                    elif "Zakończono" in status:
+                        self.files[idx]['label'].configure(foreground="darkgreen")
+                        
                 elif msg[0] == 'success':
-                    self.status.set(f"Saved: {msg[1]}")
+                    self.status.set(f"Zapisano: {msg[1]}")
                 elif msg[0] == 'error':
-                    self.status.set(f"Error: {msg[1]}")
+                    self.status.set(f"Błąd: {msg[1]}")
+                    self.status_label.configure(foreground="red")
                 elif msg[0] == 'done':
                     # Re-enable buttons after processing
                     for child in self.root.winfo_children():
                         if isinstance(child, ttk.Button):
                             child.configure(state='normal')
-                    self.status.set("Processing completed")
+                    self.status.set("Przetwarzanie zakończone")
+                    self.status_label.configure(foreground="darkgreen")
         except queue.Empty:
             pass
         self.root.after(100, self.check_queue)
 
     def process_selected(self):
-        selected_items = self.tree.selection()
-        if not selected_items:
+        files_to_process = []
+        for i, file_info in enumerate(self.files):
+            if self.check_vars[i].get():
+                files_to_process.append((i, file_info))
+                
+        if not files_to_process:
+            self.status.set("Błąd: Nie zaznaczono żadnych plików")
             return
             
-        files_to_process = []
-        for item in selected_items:
-            for file_info in self.files:
-                if file_info['item'] == item:
-                    files_to_process.append(file_info)
-                    break
-                    
         self._process_files(files_to_process)
 
     def process_all(self):
-        self._process_files(self.files)
+        files_to_process = [(i, f) for i, f in enumerate(self.files)]
+        self._process_files(files_to_process)
 
     def _process_files(self, files_to_process):
         output_dir = self.output_dir.get()
         if not output_dir:
-            self.status.set("Please select output directory")
+            self.status.set("Błąd: Wybierz folder wyjściowy")
             return
             
         os.makedirs(output_dir, exist_ok=True)
@@ -348,25 +425,29 @@ class DenoiserGUI:
         Thread(target=self._processing_thread, args=(files_to_process,), daemon=True).start()
         
     def _processing_thread(self, files_to_process):
-        for file_info in files_to_process:
-            # Zachowaj oryginalną nazwę pliku (np. "036-c") i dodaj "-full.wav"
+        for idx, file_info in files_to_process:
+            # Update status to processing
+            self.progress_queue.put(('update', idx, 'Przetwarzanie...'))
+            
+            # Prepare output path
             original_name = os.path.splitext(os.path.basename(file_info['a0']))[0]
             output_path = os.path.join(self.output_dir.get(), f"{original_name}-full.wav")
             
-            self.progress_queue.put(('update', file_info['item'], 'Processing...'))
-            
-            success = self.denoiser.process_note(
-                file_info['a0'],
-                file_info['r'],
-                output_path,
-                self.strength.get(),
-                self.progress_queue
-            )
-            
-            if success:
-                self.progress_queue.put(('update', file_info['item'], 'Completed'))
-            else:
-                self.progress_queue.put(('update', file_info['item'], 'Failed'))
+            try:
+                success = self.denoiser.process_note(
+                    file_info['a0'],
+                    file_info['r'],
+                    output_path,
+                    self.strength.get(),
+                    self.progress_queue
+                )
+                
+                if success:
+                    self.progress_queue.put(('update', idx, 'Zakończono pomyślnie'))
+                else:
+                    self.progress_queue.put(('update', idx, 'Błąd przetwarzania'))
+            except Exception as e:
+                self.progress_queue.put(('update', idx, f'Błąd: {str(e)}'))
         
         self.progress_queue.put(('done',))
 
