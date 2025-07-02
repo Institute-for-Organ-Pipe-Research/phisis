@@ -1,0 +1,8 @@
+site_name: Badawcza implementacja technologii Viscount Physis (US7442869B2)
+
+theme:
+  name: material
+
+nav:
+  - Strona główna: index.md
+  - Organ Pipe Denoiser: denoising.md
