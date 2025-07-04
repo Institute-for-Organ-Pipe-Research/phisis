@@ -1,3 +1,5 @@
+[Aktualności](./blog/aktualnosci.md)
+
 # Dokumentacja: Badawcza implementacja technologii Viscount Physis (US7442869B2)
 
 ## Cel projektu
@@ -108,3 +110,5 @@ pip install numpy scipy
 ## Licencja
 
 Projekt edukacyjny. Brak powiązań z producentem Viscount. 
+
+Dokładna analiza oscylatorów cyfrowych [oscylatory cyfrowe](./oscylator-cyfrowy.md)

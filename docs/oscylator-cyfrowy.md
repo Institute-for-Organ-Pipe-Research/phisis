@@ -123,6 +123,8 @@ Skrypt demonstruje zachowanie sygnałów sinusoidalnych w różnych scenariuszac
 - **Opis:**  
   Widmo pełnego sygnału potwierdza stabilność wersji patentowej.
 
+![oscylatory cyfrowe](./plots/oscylatory-cyfrowe.png)
+
 ---
 
 ## Szczegóły implementacyjne oscylatora opatentowanego
