@@ -1,14 +1,12 @@
 /.venv
 /backup
 /grandbrige
-/.ipynb_checkpoints
+
+
 
 diala.py
 test.py
 
-Phisis Editor.ipynb
-Untitled.ipynb
-*.ipynb
 
 *.pyc
 
